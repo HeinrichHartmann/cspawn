@@ -99,7 +99,7 @@ def _get_surface_pid(surface: str, workspace: str) -> str | None:
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--model", default="opus", help="claude model (default: opus)")
+    ap.add_argument("--model", default="", help="claude model override; omit to use global settings.json default")
     ap.add_argument(
         "--profile",
         default="",
@@ -241,16 +241,17 @@ def main() -> None:
     # "OK surface:39 pane:4 workspace:4" -> surface:39
     surface = next(tok for tok in out.split() if tok.startswith("surface:"))
 
+    model_flag = f"--model {shlex.quote(args.model)} " if args.model else ""
     if args.profile:
         cmd_str = (
             f"cd {shlex.quote(str(worktree))} && "
-            f"claude --model {shlex.quote(args.model)} "
+            f"claude {model_flag}"
             f'--system-prompt "$(cat .claude/system-prompt.md)"'
         )
     else:
         cmd_str = (
             f"cd {shlex.quote(str(worktree))} && "
-            f"claude --model {shlex.quote(args.model)}"
+            f"claude {model_flag}".rstrip()
         )
     cmux("send", "--surface", surface, "--workspace", workspace, cmd_str)
     cmux("send-key", "--surface", surface, "--workspace", workspace, "enter")
