@@ -62,8 +62,9 @@ def main() -> None:
     ap.add_argument("--model", default="opus", help="claude model (default: opus)")
     ap.add_argument(
         "--profile",
-        required=True,
-        help="profile name in .agents/profiles/ (worker, architect) or a path",
+        default="",
+        help="profile name in .agents/profiles/ (worker, architect) or a path; "
+             "omit to launch claude without a system prompt or worktree",
     )
     ap.add_argument(
         "--beads",
@@ -90,53 +91,57 @@ def main() -> None:
 
     repo = Path(sh("git", "rev-parse", "--show-toplevel"))
 
-    # Resolve profile
-    profile_path = Path(args.profile)
-    if not profile_path.exists():
-        profile_path = repo / ".agents" / "profiles" / f"{args.profile}.md"
-    if not profile_path.exists():
-        sys.exit(f"error: profile not found: {args.profile} ({profile_path})")
-    profile_name = profile_path.stem
-    system_prompt = profile_path.read_text(encoding="utf-8")
+    if args.profile:
+        # Resolve profile
+        profile_path = Path(args.profile)
+        if not profile_path.exists():
+            profile_path = repo / ".agents" / "profiles" / f"{args.profile}.md"
+        if not profile_path.exists():
+            sys.exit(f"error: profile not found: {args.profile} ({profile_path})")
+        profile_name = profile_path.stem
+        system_prompt = profile_path.read_text(encoding="utf-8")
 
-    # Fork workspace: worktree on a fresh branch from main
-    agent_id = secrets.token_hex(3)
-    branch = f"{profile_name}/{agent_id}"
-    worktree = repo.parent / f"{repo.name}-{profile_name}-{agent_id}"
-    sh("git", "worktree", "add", str(worktree), "-b", branch, "main", cwd=repo)
-    # Allow the worktree's .envrc — otherwise direnv silently falls back
-    # to a parent .envrc and agents run against the wrong environment.
-    if (worktree / ".envrc").exists():
-        sh("direnv", "allow", str(worktree))
-    # Grant edit/test/git permissions scoped to this worktree only
-    claude_dir = worktree / ".claude"
-    claude_dir.mkdir(exist_ok=True)
-    (claude_dir / "settings.local.json").write_text(
-        json.dumps(WORKTREE_PERMISSIONS, indent=2) + "\n", encoding="utf-8"
-    )
-
-    # Compose scope and write the full prompt into the worktree (dies with it).
-    # Passing it via a file avoids shell-quoting a multi-KB argument through
-    # the cmux send pipeline.
-    parts = [
-        system_prompt,
-        "",
-        "## Session scope",
-        f"Your worktree is already created: {worktree} on branch {branch} "
-        f"(forked from main). You are running inside it. Skip any worktree "
-        f"setup steps from the profile. Never modify the main checkout.",
-    ]
-    if args.beads:
-        parts.append(
-            f"Work ONLY on these beads/labels: {args.beads}. "
-            f"Inspect them with `bd show <id>` (or `bd list -l <label>`) before starting."
+        # Fork workspace: worktree on a fresh branch from main
+        agent_id = secrets.token_hex(3)
+        branch = f"{profile_name}/{agent_id}"
+        worktree = repo.parent / f"{repo.name}-{profile_name}-{agent_id}"
+        sh("git", "worktree", "add", str(worktree), "-b", branch, "main", cwd=repo)
+        # Allow the worktree's .envrc — otherwise direnv silently falls back
+        # to a parent .envrc and agents run against the wrong environment.
+        if (worktree / ".envrc").exists():
+            sh("direnv", "allow", str(worktree))
+        # Grant edit/test/git permissions scoped to this worktree only
+        claude_dir = worktree / ".claude"
+        claude_dir.mkdir(exist_ok=True)
+        (claude_dir / "settings.local.json").write_text(
+            json.dumps(WORKTREE_PERMISSIONS, indent=2) + "\n", encoding="utf-8"
         )
+
+        # Compose scope and write the full prompt into the worktree (dies with it).
+        # Passing it via a file avoids shell-quoting a multi-KB argument through
+        # the cmux send pipeline.
+        parts = [
+            system_prompt,
+            "",
+            "## Session scope",
+            f"Your worktree is already created: {worktree} on branch {branch} "
+            f"(forked from main). You are running inside it. Skip any worktree "
+            f"setup steps from the profile. Never modify the main checkout.",
+        ]
+        if args.beads:
+            parts.append(
+                f"Work ONLY on these beads/labels: {args.beads}. "
+                f"Inspect them with `bd show <id>` (or `bd list -l <label>`) before starting."
+            )
+        else:
+            parts.append("Find work with `bd ready`.")
+        if args.extra_prompt:
+            parts.append(args.extra_prompt)
+        prompt_file = claude_dir / "system-prompt.md"
+        prompt_file.write_text("\n".join(parts), encoding="utf-8")
     else:
-        parts.append("Find work with `bd ready`.")
-    if args.extra_prompt:
-        parts.append(args.extra_prompt)
-    prompt_file = claude_dir / "system-prompt.md"
-    prompt_file.write_text("\n".join(parts), encoding="utf-8")
+        profile_name = "claude"
+        worktree = repo
 
     # Resolve cmux workspace
     if args.workspace:
@@ -156,11 +161,17 @@ def main() -> None:
     # "OK surface:39 pane:4 workspace:4" -> surface:39
     surface = next(tok for tok in out.split() if tok.startswith("surface:"))
 
-    cmd_str = (
-        f"cd {shlex.quote(str(worktree))} && "
-        f"claude --model {shlex.quote(args.model)} "
-        f'--system-prompt "$(cat .claude/system-prompt.md)"'
-    )
+    if args.profile:
+        cmd_str = (
+            f"cd {shlex.quote(str(worktree))} && "
+            f"claude --model {shlex.quote(args.model)} "
+            f'--system-prompt "$(cat .claude/system-prompt.md)"'
+        )
+    else:
+        cmd_str = (
+            f"cd {shlex.quote(str(worktree))} && "
+            f"claude --model {shlex.quote(args.model)}"
+        )
     cmux("send", "--surface", surface, "--workspace", workspace, cmd_str)
     cmux("send-key", "--surface", surface, "--workspace", workspace, "enter")
 
@@ -195,7 +206,8 @@ def main() -> None:
     cmux("rename-tab", "--surface", surface, "--workspace", workspace, title)
 
     print(f"spawned:   {surface} in {workspace}")
-    print(f"worktree:  {worktree} on {branch}")
+    if args.profile:
+        print(f"worktree:  {worktree} on {branch}")
     print(f"scope:     {args.beads or 'bd ready'}")
     print(f"kickoff:   {args.kickoff}")
 
