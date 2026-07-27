@@ -10,13 +10,14 @@ Source: https://gist.github.com/HeinrichHartmann/bb4d3a8b25b8515b6aaf94b014033b1
    scoped permissions via .claude/settings.local.json.
 3. Opens a new terminal tab (surface) in the current cmux workspace and
    starts claude inside the worktree.
-4. Waits for the claude banner, then sends a kickoff message so the
-   interactive session starts working instead of idling at the prompt.
+4. Waits for the claude banner, then sends the prompt so the interactive
+   session starts working instead of idling.
 
 Usage:
-    cspawn --model sonnet --profile worker --beads "gax-sy6 gax-qo8"
-    cspawn --profile worker --beads "gdoc"   # by label
-    cspawn --no-fork --profile researcher    # run in current repo, no worktree
+    cspawn "implement the beads" --model sonnet --profile worker --beads "gax-sy6 gax-qo8"
+    cspawn "implement the beads" --profile worker --beads "gdoc"   # by label
+    cspawn "research X" --no-fork --profile researcher    # run in current repo, no worktree
+    cspawn          # no prompt → prints this help and exits
 
 Agent lifecycle
 ---------------
@@ -98,7 +99,7 @@ def _get_surface_pid(surface: str, workspace: str) -> str | None:
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser(description=__doc__)
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--model", default="", help="claude model override; omit to use global settings.json default")
     ap.add_argument(
         "--profile",
@@ -111,12 +112,13 @@ def main() -> None:
         default="",
         help='bead IDs or label to scope the agent to, e.g. "gax-cvi.1 gax-75t" or "gdoc"',
     )
-    ap.add_argument("--extra-prompt", default="", help="appended to the system prompt")
     ap.add_argument(
-        "--kickoff",
-        default="go! Follow your session scope.",
-        help="first message sent to the interactive claude session",
+        "prompt",
+        nargs="?",
+        default="",
+        help="first message sent to the agent; if omitted, help is shown and nothing is spawned",
     )
+    ap.add_argument("--extra-prompt", default="", help="appended to the system prompt")
     ap.add_argument(
         "--timeout", type=int, default=30, help="seconds to wait for claude banner"
     )
@@ -132,6 +134,10 @@ def main() -> None:
              "the profile is still used as the system prompt",
     )
     args = ap.parse_args()
+
+    if not args.prompt:
+        ap.print_help()
+        sys.exit(0)
 
     repo = Path(sh("git", "rev-parse", "--show-toplevel"))
 
@@ -280,7 +286,7 @@ def main() -> None:
         )
 
     time.sleep(2)  # let the input box settle
-    cmux("send", "--surface", surface, "--workspace", workspace, args.kickoff)
+    cmux("send", "--surface", surface, "--workspace", workspace, args.prompt)
     time.sleep(1)
     cmux("send-key", "--surface", surface, "--workspace", workspace, "enter")
 
@@ -314,7 +320,7 @@ def main() -> None:
         else:
             print(f"directory: {worktree} (no-fork)")
     print(f"scope:     {args.beads or 'bd ready'}")
-    print(f"kickoff:   {args.kickoff}")
+    print(f"prompt:    {args.prompt}")
 
 
 if __name__ == "__main__":
