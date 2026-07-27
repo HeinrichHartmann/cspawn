@@ -42,7 +42,9 @@ MASTER (the agent that called cspawn):
 """
 
 import argparse
+import datetime
 import json
+import os
 import secrets
 import shlex
 import subprocess
@@ -78,6 +80,21 @@ def sh(*cmd: str, cwd: Path | None = None) -> str:
 
 def cmux(*args: str) -> str:
     return sh("cmux", *args)
+
+
+def _get_surface_pid(surface: str, workspace: str) -> str | None:
+    """Return the PID of the process running on *surface*, or None on failure."""
+    try:
+        out = cmux("top", "--processes", "--workspace", workspace)
+        # Each line looks like: "surface:39  pid:12345  ..."
+        for line in out.splitlines():
+            if surface in line:
+                for tok in line.split():
+                    if tok.startswith("pid:"):
+                        return tok[4:]
+    except subprocess.CalledProcessError:
+        pass
+    return None
 
 
 def main() -> None:
@@ -267,6 +284,26 @@ def main() -> None:
 
     title = f"{profile_name}: {args.beads or 'ready'}"
     cmux("rename-tab", "--surface", surface, "--workspace", workspace, title)
+
+    # Stamp session metadata onto every bead that was scoped to this spawn.
+    # This makes each bead self-describing: cwd, surface, workspace, pid, profile.
+    if args.beads:
+        # Get PID of the claude process on the new surface via cmux top
+        pid = _get_surface_pid(surface, workspace)
+        ts = datetime.datetime.now().isoformat(timespec="seconds")
+        note = (
+            f"spawned: {ts}\n"
+            f"surface: {surface}\n"
+            f"workspace: {workspace}\n"
+            f"cwd: {worktree}\n"
+            f"profile: {profile_name}\n"
+            f"pid: {pid or 'unknown'}"
+        )
+        for bead_id in args.beads.split():
+            try:
+                sh("bd", "note", bead_id, note, cwd=repo)
+            except subprocess.CalledProcessError:
+                pass  # bead may be a label, not an ID — best effort
 
     print(f"spawned:   {surface} in {workspace}")
     if args.profile:
