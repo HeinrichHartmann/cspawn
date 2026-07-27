@@ -87,6 +87,12 @@ def main() -> None:
         "workspace from list-workspaces (current-workspace resolves to the "
         "caller's context, which is wrong when invoked from an agent shell)",
     )
+    ap.add_argument(
+        "--no-fork",
+        action="store_true",
+        help="run in the current repo without creating a git worktree; "
+             "the profile is still used as the system prompt",
+    )
     args = ap.parse_args()
 
     repo = Path(sh("git", "rev-parse", "--show-toplevel"))
@@ -101,33 +107,42 @@ def main() -> None:
         profile_name = profile_path.stem
         system_prompt = profile_path.read_text(encoding="utf-8")
 
-        # Fork workspace: worktree on a fresh branch from main
-        agent_id = secrets.token_hex(3)
-        branch = f"{profile_name}/{agent_id}"
-        worktree = repo.parent / f"{repo.name}-{profile_name}-{agent_id}"
-        sh("git", "worktree", "add", str(worktree), "-b", branch, "main", cwd=repo)
-        # Allow the worktree's .envrc — otherwise direnv silently falls back
-        # to a parent .envrc and agents run against the wrong environment.
-        if (worktree / ".envrc").exists():
-            sh("direnv", "allow", str(worktree))
-        # Grant edit/test/git permissions scoped to this worktree only
-        claude_dir = worktree / ".claude"
-        claude_dir.mkdir(exist_ok=True)
-        (claude_dir / "settings.local.json").write_text(
-            json.dumps(WORKTREE_PERMISSIONS, indent=2) + "\n", encoding="utf-8"
-        )
+        if args.no_fork:
+            # Run in-place: no worktree, no branch, no permissions file.
+            worktree = repo
+            branch = None
+            claude_dir = repo / ".claude"
+            claude_dir.mkdir(exist_ok=True)
+        else:
+            # Fork workspace: worktree on a fresh branch from main
+            agent_id = secrets.token_hex(3)
+            branch = f"{profile_name}/{agent_id}"
+            worktree = repo.parent / f"{repo.name}-{profile_name}-{agent_id}"
+            sh("git", "worktree", "add", str(worktree), "-b", branch, "main", cwd=repo)
+            # Allow the worktree's .envrc — otherwise direnv silently falls back
+            # to a parent .envrc and agents run against the wrong environment.
+            if (worktree / ".envrc").exists():
+                sh("direnv", "allow", str(worktree))
+            # Grant edit/test/git permissions scoped to this worktree only
+            claude_dir = worktree / ".claude"
+            claude_dir.mkdir(exist_ok=True)
+            (claude_dir / "settings.local.json").write_text(
+                json.dumps(WORKTREE_PERMISSIONS, indent=2) + "\n", encoding="utf-8"
+            )
 
-        # Compose scope and write the full prompt into the worktree (dies with it).
+        # Compose scope and write the full prompt (dies with the session for
+        # forked worktrees; lives in .claude/ for --no-fork runs).
         # Passing it via a file avoids shell-quoting a multi-KB argument through
         # the cmux send pipeline.
-        parts = [
-            system_prompt,
-            "",
-            "## Session scope",
-            f"Your worktree is already created: {worktree} on branch {branch} "
-            f"(forked from main). You are running inside it. Skip any worktree "
-            f"setup steps from the profile. Never modify the main checkout.",
-        ]
+        parts = [system_prompt, "", "## Session scope"]
+        if args.no_fork:
+            parts.append(f"You are running in the main checkout: {worktree}.")
+        else:
+            parts.append(
+                f"Your worktree is already created: {worktree} on branch {branch} "
+                f"(forked from main). You are running inside it. Skip any worktree "
+                f"setup steps from the profile. Never modify the main checkout."
+            )
         if args.beads:
             parts.append(
                 f"Work ONLY on these beads/labels: {args.beads}. "
@@ -207,7 +222,10 @@ def main() -> None:
 
     print(f"spawned:   {surface} in {workspace}")
     if args.profile:
-        print(f"worktree:  {worktree} on {branch}")
+        if branch:
+            print(f"worktree:  {worktree} on {branch}")
+        else:
+            print(f"directory: {worktree} (no-fork)")
     print(f"scope:     {args.beads or 'bd ready'}")
     print(f"kickoff:   {args.kickoff}")
 
