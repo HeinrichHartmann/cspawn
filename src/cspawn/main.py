@@ -152,6 +152,31 @@ def main() -> None:
             parts.append("Find work with `bd ready`.")
         if args.extra_prompt:
             parts.append(args.extra_prompt)
+
+        # Lifecycle policy — injected into every spawned worker session.
+        parts += [
+            "",
+            "## Agent lifecycle",
+            f"You were spawned by a master agent. Your session context:",
+            f"- Working directory: {worktree}",
+            f"- Surface: (see cmux — you are the most recently spawned surface)",
+            "",
+            "**Worker responsibilities:**",
+            "1. Do the work scoped to your beads.",
+            "2. When complete, record output on the bead: `bd note <id> 'output: <what you produced>'`",
+            "3. Signal readiness for review: `bd label <id> review`",
+            "4. Then STOP and wait. Do not exit, do not clean up, do not take further action.",
+            "   Your master will review your work, send feedback or approval, and handle cleanup.",
+            "",
+            "**You do NOT:**",
+            "- Close your own surface",
+            "- Remove your worktree",
+            "- Close your bead",
+            "- Spawn further agents without explicit instruction",
+            "",
+            "The master that spawned you owns your lifecycle.",
+        ]
+
         prompt_file = claude_dir / "system-prompt.md"
         prompt_file.write_text("\n".join(parts), encoding="utf-8")
     else:
