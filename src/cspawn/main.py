@@ -16,6 +16,29 @@ Source: https://gist.github.com/HeinrichHartmann/bb4d3a8b25b8515b6aaf94b014033b1
 Usage:
     cspawn --model sonnet --profile worker --beads "gax-sy6 gax-qo8"
     cspawn --profile worker --beads "gdoc"   # by label
+    cspawn --no-fork --profile researcher    # run in current repo, no worktree
+
+Agent lifecycle
+---------------
+Workers and masters have distinct responsibilities:
+
+WORKER (the spawned agent):
+  - Do the work scoped to your beads.
+  - When done: bd note <id> "output: <what you produced>"
+  - Signal completion: bd label <id> review
+  - Then stop and wait. Do not exit, close your surface, or clean up.
+    Your master owns your lifecycle.
+
+MASTER (the agent that called cspawn):
+  - You own the full lifecycle of every surface you spawn.
+  - Check for completed work: bd children <master-id> --label review
+  - Review the output. Approve or send feedback via a new message on
+    the worker's surface.
+  - On approval:
+      bd close <worker-bead-id>
+      cmux close-surface --surface <surface-id>
+      git worktree remove <worktree-path>   # if forked
+  - Never leave surfaces or worktrees running after work is accepted.
 """
 
 import argparse
