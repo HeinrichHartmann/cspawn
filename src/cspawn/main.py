@@ -14,10 +14,27 @@ Source: https://gist.github.com/HeinrichHartmann/bb4d3a8b25b8515b6aaf94b014033b1
    session starts working instead of idling.
 
 Usage:
-    cspawn "implement the beads" --model sonnet --profile worker --beads "gax-sy6 gax-qo8"
-    cspawn "implement the beads" --profile worker --beads "gdoc"   # by label
-    cspawn "research X" --no-fork --profile researcher    # run in current repo, no worktree
+    cspawn profiles                                           # list profiles (repo → $HOME)
+
+    cspawn "implement the beads" --profile worker --beads "gax-sy6 gax-qo8"
+    cspawn "research X" --no-fork --profile researcher        # run in current repo, no worktree
     cspawn          # no prompt → prints this help and exits
+
+Profile frontmatter
+-------------------
+Profiles may start with a YAML frontmatter block:
+
+    ---
+    description: one-line summary
+    when: conditions under which to invoke this profile
+    capabilities: what the agent can do
+    permissions: Edit, Write, Bash(git:*), Bash(bd:*)
+    updated: YYYY-MM-DD
+    ---
+
+The `permissions` field (comma-separated) is written verbatim into the
+worktree's .claude/settings.local.json `allow` list. If absent, a built-in
+default set is used. Run `cspawn profiles` to see all discovered profiles.
 
 Agent lifecycle
 ---------------
@@ -79,6 +96,63 @@ def sh(*cmd: str, cwd: Path | None = None) -> str:
     ).stdout.strip()
 
 
+def parse_frontmatter(text: str) -> tuple[dict, str]:
+    """Return (metadata_dict, body) from an optional YAML frontmatter block."""
+    if not text.startswith("---"):
+        return {}, text
+    end = text.find("\n---", 3)
+    if end == -1:
+        return {}, text
+    fm_block = text[3:end].strip()
+    body = text[end + 4:].lstrip("\n")
+    meta: dict = {}
+    for line in fm_block.splitlines():
+        if ":" in line:
+            k, _, v = line.partition(":")
+            meta[k.strip()] = v.strip()
+    return meta, body
+
+
+def collect_profiles(start_dir: Path) -> list[tuple[str, Path]]:
+    """Walk start_dir → $HOME collecting .agents/profiles/*.md (closer wins)."""
+    home = Path.home()
+    seen: dict[str, Path] = {}
+    d = start_dir
+    while True:
+        profiles_dir = d / ".agents" / "profiles"
+        if profiles_dir.is_dir():
+            for p in sorted(profiles_dir.glob("*.md")):
+                if p.stem not in seen:
+                    seen[p.stem] = p
+        if d == home or d.parent == d:
+            break
+        d = d.parent
+    return sorted(seen.items())
+
+
+def cmd_profiles(start_dir: Path) -> None:
+    profiles = collect_profiles(start_dir)
+    if not profiles:
+        print("No profiles found between here and $HOME.")
+        return
+    for name, path in profiles:
+        text = path.read_text(encoding="utf-8")
+        meta, _ = parse_frontmatter(text)
+        rel = path.parent.parent.parent  # strip /.agents/profiles
+        try:
+            rel = path.relative_to(Path.home())
+            rel = Path("~") / rel
+        except ValueError:
+            rel = path
+        description = meta.get("description", "")
+        when = meta.get("when", "")
+        print(f"  {name:<16}  {description}")
+        if when:
+            print(f"  {'':16}  when: {when}")
+        print(f"  {'':16}  {rel}")
+        print()
+
+
 def cmux(*args: str) -> str:
     return sh("cmux", *args)
 
@@ -105,7 +179,10 @@ def main() -> None:
         "--profile",
         default="",
         help="profile name in .agents/profiles/ (worker, architect) or a path; "
-             "omit to launch claude without a system prompt or worktree",
+             "omit to launch claude without a system prompt or worktree. "
+             "Profiles may contain YAML frontmatter with a `permissions:` key "
+             "(comma-separated allow rules) that are written to the worktree's "
+             ".claude/settings.local.json. Run `cspawn profiles` to list available profiles.",
     )
     ap.add_argument(
         "--beads",
@@ -133,7 +210,21 @@ def main() -> None:
         help="run in the current repo without creating a git worktree; "
              "the profile is still used as the system prompt",
     )
+    ap.add_argument(
+        "--here",
+        action="store_true",
+        help="launch claude in this tab instead of opening a new one; "
+             "uses $CMUX_SURFACE_ID and $CMUX_WORKSPACE_ID from the current terminal",
+    )
     args = ap.parse_args()
+
+    if args.prompt == "profiles":
+        try:
+            start = Path(sh("git", "rev-parse", "--show-toplevel"))
+        except subprocess.CalledProcessError:
+            start = Path.cwd()
+        cmd_profiles(start)
+        sys.exit(0)
 
     if not args.prompt:
         ap.print_help()
@@ -159,7 +250,8 @@ def main() -> None:
         if not profile_path or not profile_path.exists():
             sys.exit(f"error: profile not found: {args.profile}")
         profile_name = profile_path.stem
-        system_prompt = profile_path.read_text(encoding="utf-8")
+        raw_profile = profile_path.read_text(encoding="utf-8")
+        profile_meta, system_prompt = parse_frontmatter(raw_profile)
 
         if args.no_fork:
             # Run in-place: no worktree, no branch, no permissions file.
@@ -177,11 +269,17 @@ def main() -> None:
             # to a parent .envrc and agents run against the wrong environment.
             if (worktree / ".envrc").exists():
                 sh("direnv", "allow", str(worktree))
-            # Grant edit/test/git permissions scoped to this worktree only
+            # Grant permissions scoped to this worktree only.
+            # Use the profile's `permissions:` frontmatter if present, else fall back to defaults.
+            if "permissions" in profile_meta:
+                allow = [r.strip() for r in profile_meta["permissions"].split(",") if r.strip()]
+            else:
+                allow = WORKTREE_PERMISSIONS["permissions"]["allow"]
+            worktree_settings = {"permissions": {"allow": allow}}
             claude_dir = worktree / ".claude"
             claude_dir.mkdir(exist_ok=True)
             (claude_dir / "settings.local.json").write_text(
-                json.dumps(WORKTREE_PERMISSIONS, indent=2) + "\n", encoding="utf-8"
+                json.dumps(worktree_settings, indent=2) + "\n", encoding="utf-8"
             )
 
         # Compose scope and write the full prompt (dies with the session for
@@ -237,16 +335,20 @@ def main() -> None:
         profile_name = "claude"
         worktree = repo
 
-    # Resolve cmux workspace
+    # Resolve cmux workspace and surface
     if args.workspace:
         workspace = args.workspace
     else:
         workspace = cmux("current-workspace").strip()
 
-    # New tab (surface) in the workspace, running claude in the worktree
-    out = cmux("new-surface", "--type", "terminal", "--workspace", workspace)
-    # "OK surface:39 pane:4 workspace:4" -> surface:39
-    surface = next(tok for tok in out.split() if tok.startswith("surface:"))
+    if args.here:
+        surface = os.environ.get("CMUX_SURFACE_ID", "")
+        if not surface:
+            sys.exit("error: --here requires $CMUX_SURFACE_ID (must be run inside a cmux terminal)")
+    else:
+        out = cmux("new-surface", "--type", "terminal", "--workspace", workspace)
+        # "OK surface:39 pane:4 workspace:4" -> surface:39
+        surface = next(tok for tok in out.split() if tok.startswith("surface:"))
 
     model_flag = f"--model {shlex.quote(args.model)} " if args.model else ""
     if args.profile:
