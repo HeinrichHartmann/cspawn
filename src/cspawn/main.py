@@ -123,9 +123,7 @@ def main() -> None:
     ap.add_argument(
         "--workspace",
         default="",
-        help="cmux workspace ref (e.g. workspace:4); default: the SELECTED "
-        "workspace from list-workspaces (current-workspace resolves to the "
-        "caller's context, which is wrong when invoked from an agent shell)",
+        help="cmux workspace ref (e.g. workspace:4); default: cmux current-workspace",
     )
     ap.add_argument(
         "--no-fork",
@@ -138,12 +136,22 @@ def main() -> None:
     repo = Path(sh("git", "rev-parse", "--show-toplevel"))
 
     if args.profile:
-        # Resolve profile
+        # Resolve profile: explicit path, then walk cwd → $HOME looking for .agents/profiles/<name>.md
         profile_path = Path(args.profile)
         if not profile_path.exists():
-            profile_path = repo / ".agents" / "profiles" / f"{args.profile}.md"
-        if not profile_path.exists():
-            sys.exit(f"error: profile not found: {args.profile} ({profile_path})")
+            home = Path.home()
+            search_dir = repo
+            profile_path = None
+            while True:
+                candidate = search_dir / ".agents" / "profiles" / f"{args.profile}.md"
+                if candidate.exists():
+                    profile_path = candidate
+                    break
+                if search_dir == home or search_dir.parent == search_dir:
+                    break
+                search_dir = search_dir.parent
+        if not profile_path or not profile_path.exists():
+            sys.exit(f"error: profile not found: {args.profile}")
         profile_name = profile_path.stem
         system_prompt = profile_path.read_text(encoding="utf-8")
 
@@ -227,14 +235,7 @@ def main() -> None:
     if args.workspace:
         workspace = args.workspace
     else:
-        # Selected workspace = the one the user is looking at
-        selected = [
-            line for line in cmux("list-workspaces").splitlines()
-            if "[selected]" in line
-        ]
-        if not selected:
-            sys.exit("error: no selected workspace found; pass --workspace")
-        workspace = selected[0].split()[1] if selected[0].startswith("*") else selected[0].split()[0]
+        workspace = cmux("current-workspace").strip()
 
     # New tab (surface) in the workspace, running claude in the worktree
     out = cmux("new-surface", "--type", "terminal", "--workspace", workspace)
