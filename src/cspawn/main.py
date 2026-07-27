@@ -135,21 +135,29 @@ def cmd_profiles(start_dir: Path) -> None:
     if not profiles:
         print("No profiles found between here and $HOME.")
         return
+    print()
     for name, path in profiles:
         text = path.read_text(encoding="utf-8")
         meta, _ = parse_frontmatter(text)
-        rel = path.parent.parent.parent  # strip /.agents/profiles
         try:
-            rel = path.relative_to(Path.home())
-            rel = Path("~") / rel
+            display_path = Path("~") / path.relative_to(Path.home())
         except ValueError:
-            rel = path
+            display_path = path
         description = meta.get("description", "")
         when = meta.get("when", "")
-        print(f"  {name:<16}  {description}")
+        permissions = meta.get("permissions", "")
+        updated = meta.get("updated", "")
+        print(f"  \033[1m{name}\033[0m")
+        if description:
+            print(f"    {description}")
         if when:
-            print(f"  {'':16}  when: {when}")
-        print(f"  {'':16}  {rel}")
+            print(f"    \033[2mwhen:\033[0m  {when}")
+        if permissions:
+            print(f"    \033[2mperms:\033[0m {permissions}")
+        footer = str(display_path)
+        if updated:
+            footer += f"  (updated: {updated})"
+        print(f"    \033[2m{footer}\033[0m")
         print()
 
 
