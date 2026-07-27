@@ -1,6 +1,6 @@
-# cspawn
+<p align="center"><img src="logo.svg" alt="cspawn" width="300"/></p>
 
-<p align="center"><img src="logo.svg" alt="cspawn" width="120"/></p>
+# cspawn
 
 Spawn profiled Claude Code agents in isolated git worktrees via [cmux](https://github.com/gastownhall/cmux).
 
