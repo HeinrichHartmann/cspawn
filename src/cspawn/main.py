@@ -217,6 +217,17 @@ def main() -> None:
         help="run in the current repo without creating a git worktree; "
              "the profile is still used as the system prompt",
     )
+    branch_group = ap.add_mutually_exclusive_group()
+    branch_group.add_argument(
+        "-b", "--branch",
+        default="",
+        help="branch name for the worktree; default: bead IDs or a random [a-z] string",
+    )
+    branch_group.add_argument(
+        "--no-branch",
+        action="store_true",
+        help="create the worktree without a branch (detached HEAD)",
+    )
     ap.add_argument(
         "--here",
         action="store_true",
@@ -277,10 +288,26 @@ def main() -> None:
 
         if args.no_fork:
             worktree = repo
+            branch = None
         else:
             agent_id = secrets.token_hex(3)
+            if args.branch:
+                branch = args.branch
+            elif args.no_branch:
+                branch = None
+            elif args.beads:
+                # use bead IDs as the branch name (spaces → dashes)
+                branch = args.beads.strip().replace(" ", "-")
+            else:
+                # random lowercase [a-z] string
+                branch = "agent/" + "".join(
+                    chr(ord("a") + b % 26) for b in secrets.token_bytes(6)
+                )
             worktree = repo.parent / f"{repo.name}-{profile_name}-{agent_id}"
-            sh("git", "worktree", "add", str(worktree), cwd=repo)
+            wt_cmd = ["git", "worktree", "add", str(worktree)]
+            if branch:
+                wt_cmd += ["-b", branch]
+            sh(*wt_cmd, cwd=repo)
             # Allow the worktree's .envrc — otherwise direnv silently falls back
             # to a parent .envrc and agents run against the wrong environment.
             if (worktree / ".envrc").exists():
@@ -290,8 +317,9 @@ def main() -> None:
         if args.no_fork:
             parts.append(f"You are running in the main checkout: {worktree}.")
         else:
+            branch_info = f" on branch {branch}" if branch else ""
             parts.append(
-                f"Your worktree is already created: {worktree}. "
+                f"Your worktree is already created: {worktree}{branch_info}. "
                 f"You are running inside it. Never modify the main checkout."
             )
         if args.beads:
@@ -412,8 +440,10 @@ def main() -> None:
     if args.profile:
         if args.no_fork:
             print(f"directory: {worktree} (no-fork)")
+        elif branch:
+            print(f"worktree:  {worktree} on {branch}")
         else:
-            print(f"worktree:  {worktree}")
+            print(f"worktree:  {worktree} (detached)")
     print(f"scope:     {args.beads or 'bd ready'}")
     print(f"prompt:    {args.prompt}")
 
