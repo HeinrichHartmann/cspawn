@@ -61,7 +61,6 @@ MASTER (the agent that called cspawn):
 
 import argparse
 import datetime
-import json
 import os
 import secrets
 import shlex
@@ -290,13 +289,6 @@ def main() -> None:
             if (worktree / ".envrc").exists():
                 sh("direnv", "allow", str(worktree))
 
-        claude_dir = worktree / ".claude"
-        claude_dir.mkdir(exist_ok=True)
-
-        # Compose scope and write the full prompt (dies with the session for
-        # forked worktrees; lives in .claude/ for --no-fork runs).
-        # Passing it via a file avoids shell-quoting a multi-KB argument through
-        # the cmux send pipeline.
         parts = [system_prompt, "", "## Session scope"]
         if args.no_fork:
             parts.append(f"You are running in the main checkout: {worktree}.")
@@ -320,9 +312,9 @@ def main() -> None:
         parts += [
             "",
             "## Agent lifecycle",
-            f"You were spawned by a master agent. Your session context:",
+            "You were spawned by a master agent. Your session context:",
             f"- Working directory: {worktree}",
-            f"- Surface: (see cmux — you are the most recently spawned surface)",
+            "- Surface: (see cmux — you are the most recently spawned surface)",
             "",
             "**Worker responsibilities:**",
             "1. Do the work scoped to your beads.",
@@ -340,8 +332,7 @@ def main() -> None:
             "The master that spawned you owns your lifecycle.",
         ]
 
-        prompt_file = claude_dir / "system-prompt.md"
-        prompt_file.write_text("\n".join(parts), encoding="utf-8")
+        system_prompt_full = "\n".join(parts)
     else:
         profile_name = "claude"
         worktree = repo
@@ -361,23 +352,13 @@ def main() -> None:
         # "OK surface:39 pane:4 workspace:4" -> surface:39
         surface = next(tok for tok in out.split() if tok.startswith("surface:"))
 
-    # Build the claude argv list, then shell-quote it for sending via cmux.
-    # cmux send takes a string typed into the terminal, so we must produce a
-    # shell-safe string — but we control every token and validate tool entries.
     claude_argv = ["claude"]
     if args.model:
         claude_argv += ["--model", args.model]
     if args.profile:
         claude_argv += ["--allowed-tools", ",".join(allowed_tools)]
-        claude_argv += ["--system-prompt", "$(cat .claude/system-prompt.md)"]
-    cmd_str = (
-        f"cd {shlex.quote(str(worktree))} && "
-        + " ".join(
-            # $(cat ...) must not be quoted — it's an intentional shell substitution
-            tok if tok.startswith("$(") else shlex.quote(tok)
-            for tok in claude_argv
-        )
-    )
+        claude_argv += ["--system-prompt", system_prompt_full]
+    cmd_str = f"cd {shlex.quote(str(worktree))} && " + " ".join(shlex.quote(tok) for tok in claude_argv)
     cmux("send", "--surface", surface, "--workspace", workspace, cmd_str)
     cmux("send-key", "--surface", surface, "--workspace", workspace, "enter")
 
@@ -416,7 +397,7 @@ def main() -> None:
     if args.beads:
         # Get PID of the claude process on the new surface via cmux top
         pid = _get_surface_pid(surface, workspace)
-        ts = datetime.datetime.now().isoformat(timespec="seconds")
+        ts = datetime.datetime.now(tz=datetime.UTC).isoformat(timespec="seconds")
         note = (
             f"spawned: {ts}\n"
             f"surface: {surface}\n"
