@@ -277,13 +277,10 @@ def main() -> None:
 
         if args.no_fork:
             worktree = repo
-            branch = None
         else:
-            # Fork workspace: worktree on a fresh branch from main
             agent_id = secrets.token_hex(3)
-            branch = f"{profile_name}/{agent_id}"
             worktree = repo.parent / f"{repo.name}-{profile_name}-{agent_id}"
-            sh("git", "worktree", "add", str(worktree), "-b", branch, "main", cwd=repo)
+            sh("git", "worktree", "add", str(worktree), cwd=repo)
             # Allow the worktree's .envrc — otherwise direnv silently falls back
             # to a parent .envrc and agents run against the wrong environment.
             if (worktree / ".envrc").exists():
@@ -294,9 +291,8 @@ def main() -> None:
             parts.append(f"You are running in the main checkout: {worktree}.")
         else:
             parts.append(
-                f"Your worktree is already created: {worktree} on branch {branch} "
-                f"(forked from main). You are running inside it. Skip any worktree "
-                f"setup steps from the profile. Never modify the main checkout."
+                f"Your worktree is already created: {worktree}. "
+                f"You are running inside it. Never modify the main checkout."
             )
         if args.beads:
             parts.append(
@@ -341,7 +337,7 @@ def main() -> None:
     if args.workspace:
         workspace = args.workspace
     else:
-        workspace = cmux("current-workspace").strip()
+        workspace = os.environ.get("CMUX_WORKSPACE_ID") or cmux("current-workspace").strip()
 
     if args.here:
         surface = os.environ.get("CMUX_SURFACE_ID", "")
@@ -414,10 +410,10 @@ def main() -> None:
 
     print(f"spawned:   {surface} in {workspace}")
     if args.profile:
-        if branch:
-            print(f"worktree:  {worktree} on {branch}")
-        else:
+        if args.no_fork:
             print(f"directory: {worktree} (no-fork)")
+        else:
+            print(f"worktree:  {worktree}")
     print(f"scope:     {args.beads or 'bd ready'}")
     print(f"prompt:    {args.prompt}")
 
