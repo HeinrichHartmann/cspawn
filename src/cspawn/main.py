@@ -262,7 +262,8 @@ def main() -> None:
         profile_meta, system_prompt = parse_frontmatter(raw_profile)
 
         if args.no_fork:
-            # Run in-place: no worktree, no branch, no permissions file.
+            # Run in the current repo as-is — don't touch settings.local.json.
+            # The repo's existing .claude/settings.json applies.
             worktree = repo
             branch = None
             claude_dir = repo / ".claude"
@@ -277,17 +278,16 @@ def main() -> None:
             # to a parent .envrc and agents run against the wrong environment.
             if (worktree / ".envrc").exists():
                 sh("direnv", "allow", str(worktree))
-            # Grant permissions scoped to this worktree only.
-            # Use the profile's `permissions:` frontmatter if present, else fall back to defaults.
+            # Write permissions from profile frontmatter into the fresh worktree.
+            # Falls back to built-in defaults if the profile has no permissions: key.
             if "permissions" in profile_meta:
                 allow = [r.strip() for r in profile_meta["permissions"].split(",") if r.strip()]
             else:
                 allow = WORKTREE_PERMISSIONS["permissions"]["allow"]
-            worktree_settings = {"permissions": {"allow": allow}}
             claude_dir = worktree / ".claude"
             claude_dir.mkdir(exist_ok=True)
             (claude_dir / "settings.local.json").write_text(
-                json.dumps(worktree_settings, indent=2) + "\n", encoding="utf-8"
+                json.dumps({"permissions": {"allow": allow}}, indent=2) + "\n", encoding="utf-8"
             )
 
         # Compose scope and write the full prompt (dies with the session for
