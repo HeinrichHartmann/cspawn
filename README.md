@@ -7,7 +7,7 @@ Spawn profiled Claude Code agents in isolated git worktrees via [cmux](https://g
 Each invocation:
 1. Reads an agent profile from `.agents/profiles/<name>.md`
 2. Creates a fresh git worktree on a new branch forked from `main`
-3. Writes scoped `settings.local.json` permissions into the worktree
+3. Passes `--allowed-tools` from the profile frontmatter to `claude`
 4. Opens a new terminal tab in the current cmux workspace, starts `claude` inside the worktree
 5. Waits for the Claude banner, then sends a kickoff message
 
@@ -49,12 +49,12 @@ Profiles (`.agents/profiles/<name>.md`) may start with a YAML block:
 description: one-line summary
 when: when to invoke this profile
 capabilities: what the agent can do
-permissions: Edit, Write, Bash(git:*), Bash(bd:*)
+allowed-tools: Edit, Write, Bash(git:*), Bash(bd:*)
 updated: YYYY-MM-DD
 ---
 ```
 
-The `permissions` field is written verbatim into the worktree's `.claude/settings.local.json` allow list.
+The `allowed-tools` field is passed verbatim as `--allowed-tools` to `claude`. Entries must match `ToolName` or `ToolName(pattern)` — invalid entries are rejected at spawn time.
 
 ## Requirements
 

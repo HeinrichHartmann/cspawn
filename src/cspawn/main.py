@@ -28,13 +28,13 @@ Profiles may start with a YAML frontmatter block:
     description: one-line summary
     when: conditions under which to invoke this profile
     capabilities: what the agent can do
-    permissions: Edit, Write, Bash(git:*), Bash(bd:*)
+    allowed-tools: Edit, Write, Bash(git:*), Bash(bd:*)  # passed as --allowed-tools to claude
     updated: YYYY-MM-DD
     ---
 
-The `permissions` field (comma-separated) is written verbatim into the
-worktree's .claude/settings.local.json `allow` list. If absent, a built-in
-default set is used. Run `cspawn profiles` to see all discovered profiles.
+The `allowed-tools` field (comma-separated) is passed verbatim as
+`--allowed-tools` to claude. Entries must match `ToolName` or `ToolName(pattern)`.
+If absent, a built-in default set is used. Run `cspawn profiles` to list profiles.
 
 Agent lifecycle
 ---------------
@@ -145,15 +145,15 @@ def cmd_profiles(start_dir: Path) -> None:
             display_path = path
         description = meta.get("description", "")
         when = meta.get("when", "")
-        permissions = meta.get("permissions", "")
+        tools_display = meta.get("allowed-tools", meta.get("permissions", ""))
         updated = meta.get("updated", "")
         print(f"  \033[1m{name}\033[0m")
         if description:
             print(f"    {description}")
         if when:
             print(f"    \033[2mwhen:\033[0m  {when}")
-        if permissions:
-            print(f"    \033[2mperms:\033[0m {permissions}")
+        if tools_display:
+            print(f"    \033[2mtools:\033[0m {tools_display}")
         footer = str(display_path)
         if updated:
             footer += f"  (updated: {updated})"
@@ -188,9 +188,9 @@ def main() -> None:
         default="",
         help="profile name in .agents/profiles/ (worker, architect) or a path; "
              "omit to launch claude without a system prompt or worktree. "
-             "Profiles may contain YAML frontmatter with a `permissions:` key "
-             "(comma-separated allow rules) that are written to the worktree's "
-             ".claude/settings.local.json. Run `cspawn profiles` to list available profiles.",
+             "Profiles may contain YAML frontmatter with an `allowed-tools:` key "
+             "(comma-separated, e.g. 'Edit,Bash(git:*)') passed as --allowed-tools to claude. "
+             "Run `cspawn profiles` to list available profiles.",
     )
     ap.add_argument(
         "--beads",
@@ -262,8 +262,17 @@ def main() -> None:
         profile_meta, system_prompt = parse_frontmatter(raw_profile)
 
         # Resolve allowed tools from profile frontmatter, fallback to defaults.
-        if "permissions" in profile_meta:
-            allowed_tools = [r.strip() for r in profile_meta["permissions"].split(",") if r.strip()]
+        _TOOL_RE = __import__("re").compile(r"^[A-Za-z][A-Za-z0-9_]*(\([^)]*\))?$")
+        raw_tools = profile_meta.get("allowed-tools", profile_meta.get("permissions", ""))
+        if raw_tools:
+            allowed_tools = []
+            for entry in raw_tools.split(","):
+                entry = entry.strip()
+                if not entry:
+                    continue
+                if not _TOOL_RE.match(entry):
+                    sys.exit(f"error: invalid allowed-tools entry in profile: {entry!r}")
+                allowed_tools.append(entry)
         else:
             allowed_tools = WORKTREE_PERMISSIONS["permissions"]["allow"]
 
@@ -352,19 +361,23 @@ def main() -> None:
         # "OK surface:39 pane:4 workspace:4" -> surface:39
         surface = next(tok for tok in out.split() if tok.startswith("surface:"))
 
-    model_flag = f"--model {shlex.quote(args.model)} " if args.model else ""
+    # Build the claude argv list, then shell-quote it for sending via cmux.
+    # cmux send takes a string typed into the terminal, so we must produce a
+    # shell-safe string — but we control every token and validate tool entries.
+    claude_argv = ["claude"]
+    if args.model:
+        claude_argv += ["--model", args.model]
     if args.profile:
-        tools_flag = "--allowed-tools " + shlex.quote(",".join(allowed_tools)) + " "
-        cmd_str = (
-            f"cd {shlex.quote(str(worktree))} && "
-            f"claude {model_flag}{tools_flag}"
-            f'--system-prompt "$(cat .claude/system-prompt.md)"'
+        claude_argv += ["--allowed-tools", ",".join(allowed_tools)]
+        claude_argv += ["--system-prompt", "$(cat .claude/system-prompt.md)"]
+    cmd_str = (
+        f"cd {shlex.quote(str(worktree))} && "
+        + " ".join(
+            # $(cat ...) must not be quoted — it's an intentional shell substitution
+            tok if tok.startswith("$(") else shlex.quote(tok)
+            for tok in claude_argv
         )
-    else:
-        cmd_str = (
-            f"cd {shlex.quote(str(worktree))} && "
-            f"claude {model_flag}".rstrip()
-        )
+    )
     cmux("send", "--surface", surface, "--workspace", workspace, cmd_str)
     cmux("send-key", "--surface", surface, "--workspace", workspace, "enter")
 
