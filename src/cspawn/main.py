@@ -261,13 +261,15 @@ def main() -> None:
         raw_profile = profile_path.read_text(encoding="utf-8")
         profile_meta, system_prompt = parse_frontmatter(raw_profile)
 
+        # Resolve allowed tools from profile frontmatter, fallback to defaults.
+        if "permissions" in profile_meta:
+            allowed_tools = [r.strip() for r in profile_meta["permissions"].split(",") if r.strip()]
+        else:
+            allowed_tools = WORKTREE_PERMISSIONS["permissions"]["allow"]
+
         if args.no_fork:
-            # Run in the current repo as-is — don't touch settings.local.json.
-            # The repo's existing .claude/settings.json applies.
             worktree = repo
             branch = None
-            claude_dir = repo / ".claude"
-            claude_dir.mkdir(exist_ok=True)
         else:
             # Fork workspace: worktree on a fresh branch from main
             agent_id = secrets.token_hex(3)
@@ -278,17 +280,9 @@ def main() -> None:
             # to a parent .envrc and agents run against the wrong environment.
             if (worktree / ".envrc").exists():
                 sh("direnv", "allow", str(worktree))
-            # Write permissions from profile frontmatter into the fresh worktree.
-            # Falls back to built-in defaults if the profile has no permissions: key.
-            if "permissions" in profile_meta:
-                allow = [r.strip() for r in profile_meta["permissions"].split(",") if r.strip()]
-            else:
-                allow = WORKTREE_PERMISSIONS["permissions"]["allow"]
-            claude_dir = worktree / ".claude"
-            claude_dir.mkdir(exist_ok=True)
-            (claude_dir / "settings.local.json").write_text(
-                json.dumps({"permissions": {"allow": allow}}, indent=2) + "\n", encoding="utf-8"
-            )
+
+        claude_dir = worktree / ".claude"
+        claude_dir.mkdir(exist_ok=True)
 
         # Compose scope and write the full prompt (dies with the session for
         # forked worktrees; lives in .claude/ for --no-fork runs).
@@ -360,9 +354,10 @@ def main() -> None:
 
     model_flag = f"--model {shlex.quote(args.model)} " if args.model else ""
     if args.profile:
+        tools_flag = "--allowed-tools " + shlex.quote(",".join(allowed_tools)) + " "
         cmd_str = (
             f"cd {shlex.quote(str(worktree))} && "
-            f"claude {model_flag}"
+            f"claude {model_flag}{tools_flag}"
             f'--system-prompt "$(cat .claude/system-prompt.md)"'
         )
     else:
