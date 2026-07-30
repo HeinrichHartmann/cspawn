@@ -5,6 +5,9 @@ description = "Spawn profiled Claude agents in isolated git worktrees via cmux"
 requires-python = ">=3.11"
 dependencies = ["click"]
 
+[project.optional-dependencies]
+dev = ["pytest"]
+
 [project.scripts]
 cspawn = "cspawn.main:main"
 

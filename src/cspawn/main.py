@@ -61,7 +61,6 @@ MASTER (the agent that called cspawn):
 """
 
 import datetime
-import os
 import re
 import secrets
 import shlex
@@ -70,6 +69,8 @@ import time
 from pathlib import Path
 
 import click
+
+from cspawn.runtime import Runtime, get_runtime
 
 WORKTREE_PERMISSIONS_ALLOW = [
     "Edit",
@@ -85,12 +86,6 @@ WORKTREE_PERMISSIONS_ALLOW = [
 ]
 
 _TOOL_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]*(\([^)]*\))?$")
-
-
-def sh(*cmd: str, cwd: Path | None = None) -> str:
-    return subprocess.run(
-        cmd, cwd=cwd, check=True, capture_output=True, text=True
-    ).stdout.strip()
 
 
 def parse_frontmatter(text: str) -> tuple[dict, str]:
@@ -152,13 +147,9 @@ def print_profiles(start_dir: Path) -> None:
         click.echo()
 
 
-def cmux(*args: str) -> str:
-    return sh("cmux", *args)
-
-
-def _get_surface_pid(surface: str, workspace: str) -> str | None:
+def _get_surface_pid(surface: str, workspace: str, rt: Runtime) -> str | None:
     try:
-        out = cmux("top", "--processes", "--workspace", workspace)
+        out = rt.cmux.top(workspace, processes=True)
         for line in out.splitlines():
             if surface in line:
                 for tok in line.split():
@@ -177,7 +168,7 @@ def _get_surface_pid(surface: str, workspace: str) -> str | None:
 @click.option("--beads", default="", help='Bead IDs or label, e.g. "gax-cvi gax-75t".')
 @click.option("--extra-prompt", default="", help="Appended to the system prompt.")
 @click.option("--timeout", default=30, show_default=True, help="Seconds to wait for claude banner.")
-@click.option("--workspace", default="", help="cmux workspace index; default: cmux current-workspace.")
+@click.option("--workspace", default="", help="cmux workspace ref; default: cmux current-workspace.")
 @click.option("--no-fork", is_flag=True, help="Run in current repo without a git worktree.")
 @click.option("--branch", "-b", default="", help="Branch name for the worktree.")
 @click.option("--no-branch", is_flag=True, help="Create worktree without a branch (detached HEAD).")
@@ -197,12 +188,16 @@ def main(
     branch: str,
     no_branch: bool,
     here: bool,
+    rt: Runtime | None = None,
 ) -> None:
     """Spawn a profiled claude agent in a new cmux tab.
 
     PROMPT is the first message sent to the agent.
     Pass 'profiles' as PROMPT to list available profiles.
     """
+    if rt is None:
+        rt = get_runtime()
+
     if info:
         click.echo(MANUAL)
         return
@@ -213,7 +208,7 @@ def main(
 
     if prompt == "profiles":
         try:
-            start = Path(sh("git", "rev-parse", "--show-toplevel"))
+            start = rt.git.repo_root()
         except subprocess.CalledProcessError:
             start = Path.cwd()
         print_profiles(start)
@@ -222,7 +217,7 @@ def main(
     if branch and no_branch:
         raise click.UsageError("--branch and --no-branch are mutually exclusive.")
 
-    repo = Path(sh("git", "rev-parse", "--show-toplevel"))
+    repo = rt.git.repo_root()
 
     if profile:
         profile_path = Path(profile)
@@ -273,12 +268,9 @@ def main(
                     chr(ord("a") + b % 26) for b in secrets.token_bytes(6)
                 )
             worktree = repo.parent / f"{repo.name}-{profile_name}-{agent_id}"
-            wt_cmd = ["git", "worktree", "add", str(worktree)]
-            if branch_used:
-                wt_cmd += ["-b", branch_used]
-            sh(*wt_cmd, cwd=repo)
+            rt.git.worktree_add(worktree, branch=branch_used, cwd=repo)
             if (worktree / ".envrc").exists():
-                sh("direnv", "allow", str(worktree))
+                rt.git.exec("direnv", "allow", str(worktree))
 
         parts = [system_prompt, "", "## Session scope"]
         if no_fork:
@@ -331,15 +323,14 @@ def main(
         system_prompt_full = ""
 
     if not workspace:
-        workspace = cmux("current-workspace").strip()
+        workspace = rt.cmux.current_workspace()
 
     if here:
-        surface = os.environ.get("CMUX_SURFACE_ID", "")
+        surface = rt.env.surface_id()
         if not surface:
             raise click.ClickException("--here requires $CMUX_SURFACE_ID (must be run inside a cmux terminal)")
     else:
-        out = cmux("new-surface", "--type", "terminal", "--workspace", workspace)
-        surface = next(tok for tok in out.split() if tok.startswith("surface:"))
+        surface = rt.cmux.new_surface(workspace)
 
     claude_argv = ["claude"]
     if model:
@@ -348,15 +339,15 @@ def main(
         claude_argv += ["--allowed-tools", ",".join(allowed_tools)]
         claude_argv += ["--system-prompt", system_prompt_full]
     cmd_str = f"cd {shlex.quote(str(worktree))} && " + " ".join(shlex.quote(tok) for tok in claude_argv)
-    cmux("send", "--surface", surface, "--workspace", workspace, cmd_str)
-    cmux("send-key", "--surface", surface, "--workspace", workspace, "enter")
+    rt.cmux.send(surface, workspace, cmd_str)
+    rt.cmux.send_key(surface, workspace, "enter")
 
     deadline = time.time() + timeout
     ready = False
     while time.time() < deadline:
         time.sleep(2)
         try:
-            screen = cmux("read-screen", "--surface", surface, "--workspace", workspace, "--lines", "20")
+            screen = rt.cmux.read_screen(surface, workspace)
         except subprocess.CalledProcessError:
             continue
         if "Claude Code" in screen:
@@ -370,15 +361,15 @@ def main(
         )
 
     time.sleep(2)
-    cmux("send", "--surface", surface, "--workspace", workspace, prompt)
+    rt.cmux.send(surface, workspace, prompt)
     time.sleep(1)
-    cmux("send-key", "--surface", surface, "--workspace", workspace, "enter")
+    rt.cmux.send_key(surface, workspace, "enter")
 
     title = f"{profile_name}: {beads or 'ready'}"
-    cmux("rename-tab", "--surface", surface, "--workspace", workspace, title)
+    rt.cmux.rename_tab(surface, workspace, title)
 
     if beads:
-        pid = _get_surface_pid(surface, workspace)
+        pid = _get_surface_pid(surface, workspace, rt)
         ts = datetime.datetime.now(tz=datetime.UTC).isoformat(timespec="seconds")
         note = (
             f"spawned: {ts}\n"
@@ -390,7 +381,7 @@ def main(
         )
         for bead_id in beads.split():
             try:
-                sh("bd", "note", bead_id, note, cwd=repo)
+                rt.git.exec("bd", "note", bead_id, note, cwd=repo)
             except subprocess.CalledProcessError:
                 pass
 
