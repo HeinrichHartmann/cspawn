@@ -1,0 +1,7 @@
+{
+  "database": "dolt",
+  "backend": "dolt",
+  "dolt_mode": "embedded",
+  "dolt_database": "cspwan",
+  "project_id": "e5f064ee-7d9e-47cd-9115-22f40e111e9d"
+}
