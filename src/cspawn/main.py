@@ -159,7 +159,33 @@ def _get_surface_pid(surface: str, workspace: str, rt: Runtime) -> str | None:
     return None
 
 
-@click.command(context_settings={"help_option_names": ["-h", "--help"]})
+class _MainGroup(click.Group):
+    """Group that falls back to the spawn command for unknown subcommand names."""
+
+    def parse_args(self, ctx: click.Context, args: list[str]) -> list[str]:
+        # Route to spawn unless the first non-option token is a known subcommand.
+        # Also route when all args are options (no positional found).
+        for arg in args:
+            if arg.startswith("-"):
+                continue
+            if arg not in self.commands:
+                args = ["spawn"] + args
+            return super().parse_args(ctx, args)
+        # No positional found (all flags or empty) — route to spawn.
+        if args:
+            args = ["spawn"] + args
+        return super().parse_args(ctx, args)
+
+
+@click.group(
+    cls=_MainGroup,
+    context_settings={"help_option_names": ["-h", "--help"]},
+)
+def main() -> None:
+    """Spawn a profiled claude agent in a new cmux tab."""
+
+
+@main.command(context_settings={"help_option_names": ["-h", "--help"]})
 @click.argument("prompt", required=False, default="")
 @click.option("--info", is_flag=True, help="Show full manual and exit.")
 @click.option("--model", default="", help="Claude model override.")
@@ -173,7 +199,7 @@ def _get_surface_pid(surface: str, workspace: str, rt: Runtime) -> str | None:
 @click.option("--no-branch", is_flag=True, help="Create worktree without a branch (detached HEAD).")
 @click.option("--here", is_flag=True, help="Launch in this tab instead of a new one.")
 @click.pass_context
-def main(
+def spawn(
     ctx: click.Context,
     prompt: str,
     info: bool,
@@ -189,7 +215,7 @@ def main(
     here: bool,
     rt: Runtime | None = None,
 ) -> None:
-    """Spawn a profiled claude agent in a new cmux tab.
+    """Spawn a profiled claude agent (default command).
 
     PROMPT is the first message sent to the agent.
     Pass 'profiles' as PROMPT to list available profiles.
@@ -394,6 +420,32 @@ def main(
             click.echo(f"worktree:  {worktree} (detached)")
     click.echo(f"scope:     {beads or 'bd ready'}")
     click.echo(f"prompt:    {prompt}")
+
+
+@main.group()
+def skill() -> None:
+    """Manage cspawn skills."""
+
+
+@skill.command("install")
+@click.option("--target", default="", help="Install directory (default: ~/.agents/skills).")
+def skill_install(target: str) -> None:
+    """Symlink the cspawn skill into ~/.agents/skills/cspawn."""
+    skill_src = Path(__file__).parent.parent.parent / ".agents" / "skills" / "cspawn"
+    if not skill_src.exists():
+        raise click.ClickException(f"skill source not found: {skill_src}")
+
+    skills_dir = Path(target) if target else Path.home() / ".agents" / "skills"
+    skills_dir.mkdir(parents=True, exist_ok=True)
+    dest = skills_dir / "cspawn"
+
+    if dest.is_symlink():
+        dest.unlink()
+    elif dest.exists():
+        raise click.ClickException(f"{dest} already exists and is not a symlink — remove it manually")
+
+    dest.symlink_to(skill_src.resolve())
+    click.echo(f"installed: {dest} -> {skill_src.resolve()}")
 
 
 if __name__ == "__main__":

@@ -37,6 +37,8 @@ cspawn "quick fix" --profile developer --here          # use current tab
 | `--extra-prompt` | | Text appended to the system prompt |
 | `--no-fork` | | Run in the current repo without creating a git worktree |
 | `--here` | | Launch in the current cmux tab instead of opening a new one |
+| `--branch`, `-b` | | Branch name for the worktree (default: bead IDs or `agent/<random>`) |
+| `--no-branch` | | Create worktree with detached HEAD (no branch) |
 | `--timeout` | `30` | Seconds to wait for Claude banner |
 | `--workspace` | auto | cmux workspace ref (default: `cmux current-workspace`) |
 
@@ -55,6 +57,17 @@ updated: YYYY-MM-DD
 ```
 
 The `allowed-tools` field is passed verbatim as `--allowed-tools` to `claude`. Entries must match `ToolName` or `ToolName(pattern)` — invalid entries are rejected at spawn time.
+
+## Agent Skill
+
+A Claude Code skill for using cspawn from within agents ships with the repo at `.agents/skills/cspawn/SKILL.md`. Copy or symlink it to `~/.agents/skills/cspawn/SKILL.md` to make it available globally.
+
+```sh
+mkdir -p ~/.agents/skills
+ln -s "$(pwd)/.agents/skills/cspawn" ~/.agents/skills/cspawn
+```
+
+The skill teaches agents how to spawn workers, fan out work to parallel Claude instances, monitor workers via cmux, and clean up surfaces and worktrees after review.
 
 ## Requirements
 

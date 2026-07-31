@@ -39,7 +39,7 @@ def invoke(args: list[str], rt: FakeRuntime) -> object:
 class TestNoProfile:
     def test_no_prompt_shows_help(self):
         runner = CliRunner()
-        result = runner.invoke(main, [], catch_exceptions=False)
+        result = runner.invoke(main, ["spawn"], catch_exceptions=False)
         assert result.exit_code == 0
         assert "PROMPT" in result.output
 
