@@ -65,7 +65,6 @@ import re
 import secrets
 import shlex
 import subprocess
-import time
 from pathlib import Path
 
 import click
@@ -342,10 +341,10 @@ def main(
     rt.cmux.send(surface, workspace, cmd_str)
     rt.cmux.send_key(surface, workspace, "enter")
 
-    deadline = time.time() + timeout
+    deadline = rt.now() + timeout
     ready = False
-    while time.time() < deadline:
-        time.sleep(2)
+    while rt.now() < deadline:
+        rt.sleep(2)
         try:
             screen = rt.cmux.read_screen(surface, workspace)
         except subprocess.CalledProcessError:
@@ -360,9 +359,9 @@ def main(
             f"check the tab manually; kickoff NOT sent"
         )
 
-    time.sleep(2)
+    rt.sleep(2)
     rt.cmux.send(surface, workspace, prompt)
-    time.sleep(1)
+    rt.sleep(1)
     rt.cmux.send_key(surface, workspace, "enter")
 
     title = f"{profile_name}: {beads or 'ready'}"

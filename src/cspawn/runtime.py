@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+import time
 from pathlib import Path
 
 
@@ -77,6 +78,12 @@ class Runtime:
         self.cmux = CmuxRuntime()
         self.git = GitRuntime()
         self.env = EnvRuntime()
+
+    def sleep(self, seconds: float) -> None:
+        time.sleep(seconds)
+
+    def now(self) -> float:
+        return time.time()
 
 
 # Module-level singleton for production use

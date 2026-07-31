@@ -99,3 +99,10 @@ class FakeRuntime:
         self.cmux = FakeCmux()
         self.git = FakeGit(repo_root)
         self.env = FakeEnv()
+        self._now = 0.0
+
+    def sleep(self, seconds: float) -> None:
+        self._now += seconds
+
+    def now(self) -> float:
+        return self._now
